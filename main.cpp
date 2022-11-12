@@ -115,7 +115,7 @@ void segmentPoint(FbxVector4* v0, FbxVector4* v1, double pivot, int axis, FbxVec
 unsigned int rasterizeTriangle(FbxVector4& v0, FbxVector4& v1, FbxVector4& v2,
                        FbxVector4& lower_bound,
                        FbxVector4& sample_size, FbxVector4& inversed_sample_size,
-                       ofstream& ply_file)
+                       ofstream& output_file)
 {
     unsigned int sample_count = 0;
     //calculate triangle bound
@@ -198,21 +198,16 @@ unsigned int rasterizeTriangle(FbxVector4& v0, FbxVector4& v1, FbxVector4& v2,
             y_index_bound[0] = (int)::FbxFloor((y_lower_bound - lower_bound[1]) * inversed_sample_size[1]);
             y_index_bound[1] = (int)::FbxFloor((y_upper_bound - lower_bound[1]) * inversed_sample_size[1]) + 1;
 
-            double y_pivot = (y_index_bound[0] + 1) * sample_size[1] + lower_bound[1];
-
-            for (int y_index = y_index_bound[0]; y_index < y_index_bound[1]; ++y_index, y_pivot += sample_size[1])
+            for (int y_index = y_index_bound[0]; y_index < y_index_bound[1]; ++y_index)
             {
                 Point point{x_index, y_index, z_index};
                 if (g_point_cloud.count(point) > 0) continue;
 
                 g_point_cloud.insert(point);
-
-                float ply_point[3];
-                ply_point[0] = (float)x_pivot;
-                ply_point[1] = (float)y_pivot;
-                ply_point[2] = (float)z_pivot;
                 
-                ply_file.write((char*)ply_point, sizeof(float) * 3);
+                output_file.write((char*)&point.x, sizeof(int));
+                output_file.write((char*)&point.y, sizeof(int));
+                output_file.write((char*)&point.z, sizeof(int));
                 sample_count++;
             }
         }
@@ -271,9 +266,9 @@ void calculateBounds(FbxScene* scene, FbxVector4* bounds)
     }
 }
 
-unsigned int rasterizeTriangles(FbxScene* scene, FbxVector4* bounds,
+void rasterizeTriangles(FbxScene* scene, FbxVector4* bounds,
                         FbxVector4& sample_size, FbxVector4& inversed_sample_size,
-                        ofstream& ply_file)
+                        ofstream& output_file)
 {
 #ifdef DEBUG_INFO
     cout << "Start processing fbx nodes ..." << endl;
@@ -345,7 +340,7 @@ unsigned int rasterizeTriangles(FbxScene* scene, FbxVector4* bounds,
                               bounds[0],
                               sample_size,
                               inversed_sample_size,
-                              ply_file);
+                              output_file);
         }
 
         delete[] transformed_vertices;
@@ -354,59 +349,6 @@ unsigned int rasterizeTriangles(FbxScene* scene, FbxVector4* bounds,
 #ifdef DEBUG_INFO
     cout << "Finished sampling: " << sample_count << " samples in total" << endl;
 #endif
-
-    return sample_count;
-}
-
-void finalizePlyFile(string& ply_file_name, unsigned int sample_count)
-{
-    ofstream ply_file_header(ply_file_name + ".ply");
-    if (ply_file_header.is_open() == false)
-    {
-        return;
-    }
-
-#ifdef DEBUG_INFO
-    cout << "Start writing ply file: " << ply_file_name << ".ply" << endl;
-#endif
-
-    ply_file_header << "ply" << endl;
-    ply_file_header << "format binary_little_endian 1.0" << endl;
-    ply_file_header << "element vertex " << sample_count << endl;
-    ply_file_header << "property float x" << endl;
-    ply_file_header << "property float y" << endl;
-    ply_file_header << "property float z" << endl;
-    ply_file_header << "end_header" << endl;
-
-    ply_file_header.close();
-
-    ifstream binary_ply_file(ply_file_name + ".bin", ios::binary);
-    if (binary_ply_file.is_open() == false)
-    {
-        return;
-    }
-    
-    binary_ply_file.seekg(0, ios::end);
-    size_t binary_size = binary_ply_file.tellg();
-    binary_ply_file.seekg(0, ios::beg);
-
-    ofstream ply_file(ply_file_name + ".ply", ios::binary | ios::app);
-    if (ply_file.is_open() == false)
-    {
-        return;
-    }
-
-    char* binary_buffer = new char[binary_size];
-    binary_ply_file.read(binary_buffer, binary_size);
-    ply_file.write(binary_buffer, binary_size);
-    delete[] binary_buffer;
-
-#ifdef DEBUG_INFO
-    cout << "Finished writing Ply file" << endl;
-#endif
-
-    ply_file.close();
-    binary_ply_file.close();
 }
 
 int main(int argc, char* argv[])
@@ -415,9 +357,9 @@ int main(int argc, char* argv[])
     FbxManager* fbx_manager{nullptr};
     FbxScene* fbx_scene{nullptr};
 
-    string ply_file_name(argv[1]);
-    ofstream binary_ply_file(ply_file_name + ".bin", ios::binary);
-    if (binary_ply_file.is_open() == false)
+    string output_file_name(argv[1]);
+    ofstream output_file(output_file_name + ".bin", ios::binary);
+    if (output_file.is_open() == false)
     {
         return -1;
     }
@@ -451,15 +393,23 @@ int main(int argc, char* argv[])
     const FbxVector4 margin(0.5, 0.5, 0.5, 0.0);
     bounds[0] -= margin;
     bounds[1] += margin;
-    FbxVector4 sample_size(atof(argv[2]), atof(argv[3]), atof(argv[4]));
+    FbxVector4 sample_size_vec(atof(argv[2]), atof(argv[3]), atof(argv[4]));
     FbxVector4 inversed_sample_size(1.0 / atof(argv[2]), 1.0 / atof(argv[3]), 1.0 / atof(argv[4]));
-    unsigned int sample_count = rasterizeTriangles(fbx_scene, bounds, sample_size, inversed_sample_size, binary_ply_file);
 
-    binary_ply_file.close();
+    float sample_size[3] = {0.f, 0.f, 0.f};
+    int scene_bound[3] = {0, 0, 0};
+    for (int i = 0; i < 3; ++i)
+    {
+        sample_size[i] = (float)sample_size_vec[i];
+        scene_bound[i] = (int)::FbxFloor((bounds[1][i] - bounds[0][i]) * inversed_sample_size[i]) + 1;
+    }
 
-    finalizePlyFile(ply_file_name, sample_count);
+    output_file.write((char*)sample_size, sizeof(float) * 3);
+    output_file.write((char*)scene_bound, sizeof(int) * 3);
+
+    rasterizeTriangles(fbx_scene, bounds, sample_size_vec, inversed_sample_size, output_file);
+
+    output_file.close();
 
     destroySdkObjects(fbx_manager, true);
-
-    // output matrix
 }
