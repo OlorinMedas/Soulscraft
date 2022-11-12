@@ -30,3 +30,7 @@
 *.exe
 *.out
 *.app
+
+Soulscraft.vcxproj.user
+.vs
+x64
